@@ -29,32 +29,36 @@ object Untyped extends StandardTokenParsers {
         case "\\" ~ x ~ "." ~ t => Abs(x, t)
       }
       | "(" ~> term <~ ")"
-      
-  
   )
     
   
-  def freeVariable(t: Term): Set = (
+  def freeVariable(t: Term): Set[String] = (
       t match {
         case Var(x) => Set(x)
         case Abs(a,b) => freeVariable(b) - a
         case App(a,b) => freeVariable(a) ++ freeVariable(b) 
       }
-      )
+   )
   
   /** <p>
    *    Alpha conversion: term <code>t</code> should be a lambda abstraction
    *    <code>\x. t</code>.
    *  </p>
    *  <p>
-   *    All free occurences of <code>x</code> inside term <code>t/code>
+   *    All free occurences of <code>x</code> inside term <code>t</code>
    *    will be renamed to a unique name.
    *  </p>
    *
    *  @param t the given lambda abstraction.
    *  @return  the transformed term with bound variables renamed.
    */
-  def alpha(t: Term): Term = ???
+  def alpha(t: Term): Term = (
+      
+      t match {
+        case Abs(x,t) => Abs(java.util.UUID.randomUUID().toString(), t)
+        case _ => t
+      }    
+  )
 
   /** Straight forward substitution method
    *  (see definition 5.3.5 in TAPL book).
@@ -72,7 +76,7 @@ object Untyped extends StandardTokenParsers {
         case Var(i) => t
         
         case Abs(`x`, t) => t
-        case Abs(y, t1) if (y != x && (freeVariable(s) contains y)) => Abs(y, subst(t1, x, s))
+        case Abs(y, t1) if (y != x && !(freeVariable(s) contains y)) => Abs(y, subst(t1, x, s))
         case App(t1, t2) => App(subst(t1, x, s), subst(t2, x, s))
         
         case _ => t
@@ -83,13 +87,44 @@ object Untyped extends StandardTokenParsers {
   /** Term 't' does not match any reduction rule. */
   case class NoReductionPossible(t: Term) extends Exception(t.toString)
 
+  object ReducableNormalOrder{
+    def unapply(t: Term):
+    Option[Term] =
+        try {
+          Some(reduceNormalOrder(t))
+        } catch {
+          case t: NoReductionPossible => None
+    }
+    
+  }
+  
+    object ReducableCallByValue{
+    def unapply(t: Term):
+    Option[Term] =
+        try {
+          Some(reduceCallByValue(t))
+        } catch {
+          case t: NoReductionPossible => None
+    }
+    
+  }
+  
   /** Normal order (leftmost, outermost redex first).
    *
    *  @param t the initial term
    *  @return  the reduced term
    */
-  def reduceNormalOrder(t: Term): Term =
-    ???
+  def reduceNormalOrder(t: Term): Term = (
+      
+      t match {
+        case App(Abs(x, t), t2) => subst(t, x, t2)  
+        case App(ReducableNormalOrder(t1p), t2) =>  App(t1p, t2)
+        case App(t1, ReducableNormalOrder(t2p)) => App(t1, t2p)
+        case Abs(x, ReducableNormalOrder(tp)) => Abs(x, tp)    
+        case _ => throw new NoReductionPossible(t)        
+      }
+  
+  )
 
   /** Call by value reducer. */
   def reduceCallByValue(t: Term): Term =
