@@ -55,9 +55,24 @@ object Untyped extends StandardTokenParsers {
   def alpha(t: Term): Term = (
       
       t match {
-        case Abs(x,t) => Abs(java.util.UUID.randomUUID().toString(), t)
+        case Abs(x,t2) => {
+          val uuid = java.util.UUID.randomUUID().toString()
+          Abs(uuid, replaceUUID(x, uuid, t2))
+        }
         case _ => t
       }    
+  )
+  def replaceUUID(x: String, uuid: String, t: Term): Term = (
+      
+    t match {
+      case Var(`x`) => Var(uuid)
+      case Var(y) if y!=x => t
+      case App(t1, t2) => App(replaceUUID(x, uuid, t1), replaceUUID(x, uuid, t2))
+      case Abs(`x`, t1 ) => Abs(uuid, replaceUUID(x, uuid, t1))
+      case Abs(y, t1) => Abs(y, replaceUUID(x, uuid, t1))
+      case _ => t
+    }
+  
   )
 
   /** Straight forward substitution method
@@ -73,12 +88,11 @@ object Untyped extends StandardTokenParsers {
       
       t match {
         case Var(`x`) => s
-        case Var(i) => t
-        
-        case Abs(`x`, t) => t
+        case Var(i) if i!="x" => t        
+        case Abs(`x`, t1) => t
         case Abs(y, t1) if (y != x && !(freeVariable(s) contains y)) => Abs(y, subst(t1, x, s))
+        case Abs(y, t1) if (y != x && (freeVariable(s) contains y)) => subst(alpha(t), x, s)
         case App(t1, t2) => App(subst(t1, x, s), subst(t2, x, s))
-        
         case _ => t
       }
   
@@ -127,8 +141,17 @@ object Untyped extends StandardTokenParsers {
   )
 
   /** Call by value reducer. */
-  def reduceCallByValue(t: Term): Term =
-    ???
+  def reduceCallByValue(t: Term): Term = (
+      t match {
+        case App(Abs(x, t1), Var(t2)) => subst(t1, x, Var(t2))
+        case App(Abs(x,t1), Abs(y, t2)) => subst(t1, x, Abs(y, t2))
+        case App(Var(t1), ReducableCallByValue(t2p)) => App(Var(t1), t2p)   
+        case App(Abs(y, t2), ReducableCallByValue(t2p)) => App(Abs(y, t2), t2p)   
+        case App(ReducableCallByValue(t1p), t2) => App(t1p, t2)
+        case _ => throw new NoReductionPossible(t)
+      }
+  
+  )
 
   /** Returns a stream of terms, each being one step of reduction.
    *
