@@ -31,8 +31,8 @@ object SimplyTyped extends StandardTokenParsers {
   )
   
   def parse: Parser[Term] = (
-    "true" ^^^ True
-  | "false" ^^^ False
+    "true" ^^^ True()
+  | "false" ^^^ False()
   | "if" ~ Term ~ "then" ~ Term ~ "else" ~ Term ^^ {
       case "if" ~ cond ~ "then" ~ t1 ~ "else" ~ t2 => If(cond, t1, t2)  
   }
@@ -40,10 +40,10 @@ object SimplyTyped extends StandardTokenParsers {
   | "pred" ~> Term ^^ Pred
   | "iszero" ~> Term ^^ IsZero
   | ident ^^ { x => Var(x)}
-       
+  | "0" ^^^ Zero()
   | "(" ~> Term <~ ")"
   | numericLit ^^ { x => numericTerm(x.toInt)}
-  | "\\" ~ ident ~ ":" ~ ? ~ "." ~ Term ^^ {
+  | "\\" ~ ident ~ ":" ~ Type ~ "." ~ Term ^^ {
         case "\\" ~ x ~ ":" ~ tp~ "." ~ t => Abs(x, tp, t)
       } 
   
