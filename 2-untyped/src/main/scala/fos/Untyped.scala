@@ -143,9 +143,7 @@ object Untyped extends StandardTokenParsers {
   /** Call by value reducer. */
   def reduceCallByValue(t: Term): Term = (
       t match {
-        case App(Abs(x, t1), Var(t2)) => subst(t1, x, Var(t2))
-        case App(Abs(x,t1), Abs(y, t2)) => subst(t1, x, Abs(y, t2))
-        case App(Var(t1), ReducableCallByValue(t2p)) => App(Var(t1), t2p)   
+        case App(Abs(x,t1), Abs(y, t2)) => subst(t1, x, Abs(y, t2))   
         case App(Abs(y, t2), ReducableCallByValue(t2p)) => App(Abs(y, t2), t2p)   
         case App(ReducableCallByValue(t1p), t2) => App(t1p, t2)
         case _ => throw new NoReductionPossible(t)
