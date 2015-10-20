@@ -211,7 +211,32 @@ object SimplyTyped extends StandardTokenParsers {
    */
   def typeof(ctx: Context, t: Term): Type = (
     t match {
-      case _ => ???
+      case True() => TypeBool
+      case False() => TypeBool
+      case Zero() => TypeNat
+      case Succ(t1) => typeof(ctx, t1) match {
+        case TypeNat => TypeNat
+        case ty => throw new TypeError(t, ty.toString +" found. "+  TypeNat.toString +" expected")
+        }
+      case Pred(t1) => typeof(ctx, t1) match {
+        case TypeNat => TypeNat
+        case ty => throw new TypeError(t, ty.toString +" found. "+  TypeNat.toString +" expected")
+      }
+      case IsZero(t1) => typeof(ctx, t1) match {
+        case TypeNat => TypeBool
+        case ty => throw new TypeError(t, ty.toString +" found. "+  TypeNat.toString +" expected")
+      }
+      case If(cond, t1, t2) => (typeof(ctx, cond), typeof(ctx, t1), typeof(ctx, t2)) match {
+        case (TypeBool, tp1, tp2) if tp1 == tp2 => tp1
+        case (tp1, tp2, tp3) => throw new TypeError(t, "If "+tp1.toString +" then "+ tp2.toString +" else "+tp3.toString())
+      }
+      case Var(x) => ctx.find(_._2 == x).getOrElse(throw new TypeError(t, x + " is undefined"))._2
+      case Abs(x, ty, t2)  => TypeFun(ty, typeof((x, ty)::ctx, t2))
+      case App(t1, t2) => (typeof(ctx, t1), typeof(ctx, t2)) match {
+        case (TypeFun(tp1, tp2), tp3) if tp1 == tp3 => tp2 
+        case (tp1, tp2) => throw new TypeError(t, tp1.toString +" "+ tp2.toString)
+      }
+      
     }    
   )
 
