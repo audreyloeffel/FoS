@@ -44,6 +44,18 @@ object SimplyTyped extends StandardTokenParsers {
   | "\\" ~ ident ~ ":" ~ Type ~ "." ~ Term ^^ {
         case "\\" ~ x ~ ":" ~ tp~ "." ~ t => Abs(x, tp, t)
       } 
+  |  "let" ~ ident ~ ":" ~ Type ~ "=" ~ Term ~ "in" ~ Term ^^ {
+    case "let" ~ x ~ ":" ~ tp ~ "=" ~ t1 ~ "in" ~ t2 => App(Abs(x, tp, t2), t1)
+    }
+  | "{" ~ Term ~ "," ~ Term ~ "}" ^^ {
+    case "{" ~ t1 ~ "," ~ t2 ~ "}" => TermPair(t1, t2)
+  }
+  |"fst" ~ Term ^^ {
+    case "fst" ~ t1 => First(t1)
+  }
+  |"snd" ~ Term ^^ {
+    case "snd" ~ t1 => Second(t1)
+  }
   
   )
   
@@ -76,6 +88,7 @@ object SimplyTyped extends StandardTokenParsers {
         case True() => true
         case False() => true
         case _ if isNumeric(t) => true
+        case TermPair(a, b) if isValue(a)&&isValue(b) => true
         case _ => false
       }
   
@@ -103,12 +116,18 @@ object SimplyTyped extends StandardTokenParsers {
         case Pred(Zero()) => Zero()
         case Pred(Succ(n)) if isNumeric(n)=> n
         case Abs(t1, ty, v2) if isValue(v2) => subst(t, t1, v2)
-        case If(t1, t2, t3) => If(reduce(t1), t2, t3)
-        case IsZero(t1) => IsZero(reduce(t1))
-        case Pred(t1) => Pred(reduce(t1))
-        case Succ(t1) => Succ(reduce(t1))
-        case App(t1, t2) => App(reduce(t1), t2)
-        case App(v1, t2) if isValue(v1) => App(v1, reduce(t2))
+        case If(Reducable(t1p), t2, t3) => If(t1p, t2, t3)
+        case IsZero(Reducable(t1p)) => IsZero(t1p)
+        case Pred(Reducable(t1p)) => Pred(t1p)
+        case Succ(Reducable(t1p)) => Succ(t1p)
+        case App(Reducable(t1p), t2) => App(t1p, t2)
+        case App(v1, Reducable(t2p)) if isValue(v1) => App(v1, t2p)
+        case First(TermPair(v1, v2)) if isValue(v1)&&isValue(v2) => v1
+        case Second(TermPair(v1, v2)) if isValue(v1)&&isValue(v2) => v2
+        case First(Reducable(t1)) => First(t1)
+        case Second(Reducable(t2)) => Second(t2)
+        case TermPair(Reducable(t1p), t2) => TermPair(t1p, t2)
+        case TermPair(t1, Reducable(t2p)) => TermPair(t1, t2p)
         case _ => throw new NoRuleApplies(t)
       }
       
@@ -134,6 +153,9 @@ object SimplyTyped extends StandardTokenParsers {
         case Succ(t1) => freeVariable(t1)
         case IsZero(t1) => freeVariable(t1)
         case If(cond, t1, t2) => freeVariable(cond) ++ freeVariable(t1) ++ freeVariable(t2)
+        case TermPair(t1, t2) => freeVariable(t1) ++ freeVariable(t2)
+        case First(t1) => freeVariable(t1)
+        case Second(t1) => freeVariable(t1)
       }
    )
   
@@ -171,6 +193,9 @@ object SimplyTyped extends StandardTokenParsers {
       case Succ(t1) => Succ(replaceUUID(x, uuid, t1))
       case IsZero(t1) => IsZero(replaceUUID(x, uuid, t1))
       case If(cond, t1, t2) => If(replaceUUID(x, uuid, cond), replaceUUID(x, uuid, t1), replaceUUID(x, uuid, t2))
+      case TermPair(t1, t2) => TermPair(replaceUUID(x, uuid, t1), replaceUUID(x, uuid, t2))
+      case First(t1) => First(replaceUUID(x, uuid, t1))
+      case Second(t1) => Second(replaceUUID(x, uuid, t1))
       case _ => t
     }
   
@@ -198,6 +223,9 @@ object SimplyTyped extends StandardTokenParsers {
         case Succ(t1) => Succ(subst(t1, x, s))
         case IsZero(t1) => IsZero(subst(t1, x, s))
         case If(cond, t1, t2) => If(subst(cond, x, s), subst(t1, x, s), subst(t2, x, s))
+        case TermPair(t1, t2) => TermPair(subst(t1, x, s), subst(t2, x, s))
+        case First(t1) => First(subst(t1, x, s))
+        case Second(t1) => Second(subst(t1, x, s))
         case _ => t
       }
   
@@ -210,34 +238,43 @@ object SimplyTyped extends StandardTokenParsers {
    *  @return    the computed type
    */
   def typeof(ctx: Context, t: Term): Type = (
+      
     t match {
       case True() => TypeBool
       case False() => TypeBool
       case Zero() => TypeNat
       case Succ(t1) => typeof(ctx, t1) match {
         case TypeNat => TypeNat
-        case ty => throw new TypeError(t, ty.toString +" found. "+  TypeNat.toString +" expected")
+        case ty => throw new TypeError(t, "parameter type mismatch: expected: Nat, found "  + ty.toString)
         }
       case Pred(t1) => typeof(ctx, t1) match {
         case TypeNat => TypeNat
-        case ty => throw new TypeError(t, ty.toString +" found. "+  TypeNat.toString +" expected")
+        case ty => throw new TypeError(t, "parameter type mismatch: expected: Nat, found "  + ty.toString)
       }
       case IsZero(t1) => typeof(ctx, t1) match {
         case TypeNat => TypeBool
-        case ty => throw new TypeError(t, ty.toString +" found. "+  TypeNat.toString +" expected")
+        case ty => throw new TypeError(t, "parameter type mismatch: expected: Bool, found "  + ty.toString)
       }
       case If(cond, t1, t2) => (typeof(ctx, cond), typeof(ctx, t1), typeof(ctx, t2)) match {
         case (TypeBool, tp1, tp2) if tp1 == tp2 => tp1
-        case (tp1, tp2, tp3) => throw new TypeError(t, "If "+tp1.toString +" then "+ tp2.toString +" else "+tp3.toString())
+        case (tp1, tp2, tp3) => throw new TypeError(t, "parameter type mismatch: expected: (Bool, t, t), found If "+tp1.toString +" then "+ tp2.toString +" else "+tp3.toString())
       }
-      case Var(x) => ctx.find(_._2 == x).getOrElse(throw new TypeError(t, x + " is undefined"))._2
+      case Var(x) => ctx.find(_._1 == x).getOrElse(throw new TypeError(t, "variable " + x + " is undefined"))._2
       case Abs(x, ty, t2)  => TypeFun(ty, typeof((x, ty)::ctx, t2))
       case App(t1, t2) => (typeof(ctx, t1), typeof(ctx, t2)) match {
         case (TypeFun(tp1, tp2), tp3) if tp1 == tp3 => tp2 
-        case (tp1, tp2) => throw new TypeError(t, tp1.toString +" "+ tp2.toString)
+        case (tp1, tp2) => throw new TypeError(t, "parameter type mismatch: expected: Fun, found: "+tp1.toString +", "+ tp2.toString)
       }
-      
-    }    
+      case TermPair(t1, t2) =>  TypePair(typeof(ctx, t1), typeof(ctx, t2))
+      case First(t1) => typeof(ctx, t1) match {
+        case TypePair(t1p, t2p) => t1p
+        case ty => throw new TypeError(t, "parameter type mismatch: expected: Pair, found "  + ty.toString)
+        }
+      case Second(t1) => typeof(ctx, t1) match {
+        case TypePair(t1p, t2p) => t2p
+        case ty => throw new TypeError(t, "parameter type mismatch: expected: Pair, found "  + ty.toString)
+        }
+      }
   )
 
     
