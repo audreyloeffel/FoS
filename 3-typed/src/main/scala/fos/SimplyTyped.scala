@@ -21,8 +21,15 @@ object SimplyTyped extends StandardTokenParsers {
     }
   )
   
+  def parseStar: Parser[Type] =(
+       rep1sep(parseType, "*") ^^{
+      case x::Nil => x
+      case list => list.reduceRight(TypePair(_,_))
+    }
+      )
+  
   def Type: Parser[Type] = (
-    rep1sep(parseType, "->") ^^{
+    rep1sep(parseStar, "->") ^^{
       case x::Nil => x
       case list => list.reduceRight(TypeFun(_,_))
     }
@@ -50,19 +57,17 @@ object SimplyTyped extends StandardTokenParsers {
   | "{" ~ Term ~ "," ~ Term ~ "}" ^^ {
     case "{" ~ t1 ~ "," ~ t2 ~ "}" => TermPair(t1, t2)
   }
-  |"fst" ~ Term ^^ {
-    case "fst" ~ t1 => First(t1)
-  }
-  |"snd" ~ Term ^^ {
-    case "snd" ~ t1 => Second(t1)
-  }
-  
+  | "fst" ~> Term ^^ First
+  | "snd" ~> Term ^^ Second  
   )
   
   def parseType: Parser[Type] =(
     "Bool" ^^^ TypeBool
   | "Nat" ^^^ TypeNat
   | "(" ~> Type <~ ")" 
+  | Type ~ "*" ~ Type ^^{
+    case t1 ~ "*" ~ t2 => TypePair(t1, t2)
+  }
   
   )
   
@@ -87,9 +92,9 @@ object SimplyTyped extends StandardTokenParsers {
       t match {
         case True() => true
         case False() => true
-        case _ if isNumeric(t) => true
-        case TermPair(a, b) if isValue(a)&&isValue(b) => true
-        case _ => false
+        case Abs(_,_,_) => true
+        case TermPair(a, b) => isValue(a) && isValue(b)
+        case _ => isNumeric(t)
       }
   
   )
@@ -107,15 +112,16 @@ object SimplyTyped extends StandardTokenParsers {
   type Context = List[(String, Type)]
 
   /** Call by value reducer. */
-  def reduce(t: Term): Term = (
+  def reduce(t: Term): Term = {  
+    
       t match {
-        case If(True(), t1, t2) => t1
-        case If(False(), t1, t2) => t2
+        case If(True(), t1, _) => t1
+        case If(False(), _, t2) => t2
         case IsZero(Zero()) => True()
         case IsZero(Succ(n))if isNumeric(n) => False()
         case Pred(Zero()) => Zero()
         case Pred(Succ(n)) if isNumeric(n)=> n
-        case Abs(t1, ty, v2) if isValue(v2) => subst(t, t1, v2)
+        case App(Abs(x, ty, t1), v) if isValue(v) => subst(t1, x, v)
         case If(Reducable(t1p), t2, t3) => If(t1p, t2, t3)
         case IsZero(Reducable(t1p)) => IsZero(t1p)
         case Pred(Reducable(t1p)) => Pred(t1p)
@@ -131,12 +137,13 @@ object SimplyTyped extends StandardTokenParsers {
         case _ => throw new NoRuleApplies(t)
       }
       
-  )
+  }
   
     object Reducable{
     def unapply(t: Term):
     Option[Term] =
         try {
+          //println(t.toString);
           Some(reduce(t))
         } catch {
           case t: NoRuleApplies => None
@@ -156,6 +163,7 @@ object SimplyTyped extends StandardTokenParsers {
         case TermPair(t1, t2) => freeVariable(t1) ++ freeVariable(t2)
         case First(t1) => freeVariable(t1)
         case Second(t1) => freeVariable(t1)
+        case _ => Set.empty
       }
    )
   
@@ -175,32 +183,13 @@ object SimplyTyped extends StandardTokenParsers {
       
       t match {
         case Abs(x, ty, t2) => {
-          val uuid = java.util.UUID.randomUUID().toString()
-          Abs(uuid, ty, replaceUUID(x, uuid, t2))
+          val uuid = java.util.UUID.randomUUID().toString
+          Abs(uuid, ty, subst(t2, x, Var(uuid)))
         }
         case _ => t
       }    
   )
-  def replaceUUID(x: String, uuid: String, t: Term): Term = (
-      
-    t match {
-      case Var(`x`) => Var(uuid)
-      case Var(y) if y!=x => t
-      case App(t1, t2) => App(replaceUUID(x, uuid, t1), replaceUUID(x, uuid, t2))
-      case Abs(`x`, ty, t1 ) => Abs(uuid, ty, replaceUUID(x, uuid, t1))
-      case Abs(y, ty, t1) => Abs(y, ty, replaceUUID(x, uuid, t1))
-      case Pred(t1) => Pred(replaceUUID(x, uuid, t1))
-      case Succ(t1) => Succ(replaceUUID(x, uuid, t1))
-      case IsZero(t1) => IsZero(replaceUUID(x, uuid, t1))
-      case If(cond, t1, t2) => If(replaceUUID(x, uuid, cond), replaceUUID(x, uuid, t1), replaceUUID(x, uuid, t2))
-      case TermPair(t1, t2) => TermPair(replaceUUID(x, uuid, t1), replaceUUID(x, uuid, t2))
-      case First(t1) => First(replaceUUID(x, uuid, t1))
-      case Second(t1) => Second(replaceUUID(x, uuid, t1))
-      case _ => t
-    }
   
-  )
-
   /** Straight forward substitution method
    *  (see definition 5.3.5 in TAPL book).
    *  [x -> s]t
@@ -210,14 +199,12 @@ object SimplyTyped extends StandardTokenParsers {
    *  @param s the term we replace x with
    *  @return  ...
    */
-  def subst(t: Term, x: String, s: Term): Term = (
-      
+  def subst(t: Term, x: String, s: Term): Term = {
+     // println("subst "+t.toString)
       t match {
         case Var(`x`) => s
-        case Var(i) if i!="x" => t        
-        case Abs(`x`, _, t1) => t
-        case Abs(y, ty, t1) if (y != x && !(freeVariable(s) contains y)) => Abs(y, ty, subst(t1, x, s))
-        case Abs(y, _, t1) if (y != x && (freeVariable(s) contains y)) => subst(alpha(t), x, s)
+        case Abs(y, ty, t1) if (y != x && !(freeVariable(s)(y))) => Abs(y, ty, subst(t1, x, s))
+        case Abs(y, _, t1) if (y != x && (freeVariable(s)(y))) => subst(alpha(t), x, s)
         case App(t1, t2) => App(subst(t1, x, s), subst(t2, x, s))
         case Pred(t1) => Pred(subst(t1, x, s))
         case Succ(t1) => Succ(subst(t1, x, s))
@@ -229,8 +216,7 @@ object SimplyTyped extends StandardTokenParsers {
         case _ => t
       }
   
-  )
-
+  }
   /** Returns the type of the given term <code>t</code>.
    *
    *  @param ctx the initial context
@@ -303,7 +289,7 @@ object SimplyTyped extends StandardTokenParsers {
           for (t <- path(trees, reduce))
             println(t)
         } catch {
-          case tperror: Exception => println(tperror.toString)
+          case tperror: Exception => tperror.printStackTrace
         }
       case e =>
         println(e)
