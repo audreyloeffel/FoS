@@ -69,7 +69,16 @@ object SimplyTypedExtended extends StandardTokenParsers {
     case "{" ~ t1 ~ "," ~ t2 ~ "}" => TermPair(t1, t2)
   }
   | "fst" ~> Term ^^ First
-  | "snd" ~> Term ^^ Second  
+  | "snd" ~> Term ^^ Second 
+  | "inl" ~ Term ~ "as" ~ Type ^^ {
+    case "inl" ~ t ~ "as" ~ tpe => Inl(t, tpe)
+  }
+  | "inr" ~ Term ~ "as" ~ Type ^^ {
+    case "inr" ~ t ~ "as" ~ tpe => Inr(t, tpe)
+  }
+  | "case" ~ Term ~ "of" ~ "inl" ~ ident ~ "=>" ~ Term ~ "|" ~ "inr" ~ ident ~ "=>" ~ Term ^^{
+    case "case" ~ t ~ "of" ~ "inl" ~ x1 ~ "=>" ~ t1 ~ "|" ~ "inr" ~ x2 ~ "=>" ~ t2 => Case(t, x1, t1, x2, t2)
+  }
   )
 
   /**
@@ -83,7 +92,8 @@ object SimplyTypedExtended extends StandardTokenParsers {
 
   /**
    * SimpleType ::= BaseType [ ("*" SimpleType) | ("+" SimpleType) ]
-   */
+   */  
+    
   def SimpleType: Parser[Type] = (
     rep1sep(BaseType, "*") ^^ {
       case x :: Nil => x
@@ -130,6 +140,8 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case False()        => true
       case Abs(_, _, _)   => true
       case TermPair(a, b) => isValue(a) && isValue(b)
+      case Inl(v, t) if isValue(v) => true
+      case Inr(v, t) if isValue(v) => true
       case _              => isNumeric(t)
     })
 
@@ -163,6 +175,12 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case Second(Reducable(t2)) => Second(t2)
       case TermPair(Reducable(t1p), t2) => TermPair(t1p, t2)
       case TermPair(t1, Reducable(t2p)) => TermPair(t1, t2p)
+      case Case(t,x1,t1,x2, t2) => t match {
+        case Inl(v,_) if isValue(v) => subst(v, x1, t1)
+        case Inr(v,_) if isValue(v) => subst(v, x2, t2)
+      } 
+      case Case(Reducable(t), x1, t1, x2, t2) => Case(t, x1, t1, x2, t2)
+      
       case _ => throw new NoRuleApplies(t)
     }
 
