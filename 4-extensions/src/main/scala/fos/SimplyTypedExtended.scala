@@ -79,6 +79,10 @@ object SimplyTypedExtended extends StandardTokenParsers {
   | "case" ~ Term ~ "of" ~ "inl" ~ ident ~ "=>" ~ Term ~ "|" ~ "inr" ~ ident ~ "=>" ~ Term ^^{
     case "case" ~ t ~ "of" ~ "inl" ~ x1 ~ "=>" ~ t1 ~ "|" ~ "inr" ~ x2 ~ "=>" ~ t2 => Case(t, x1, t1, x2, t2)
   }
+  | "fix" ~> Term ^^ Fix
+  | ("letrec" ~> ident <~ ":") ~ (Type <~ "=") ~ Term ~ ("in" ~> Term) ^^{
+    case x ~ tp ~ t1 ~ t2 => App(Abs(x, tp, t2), Fix(Abs(x, tp, t1)))
+  }
   )
 
   /**
@@ -95,10 +99,12 @@ object SimplyTypedExtended extends StandardTokenParsers {
    */  
     
   def SimpleType: Parser[Type] = (
-    rep1sep(BaseType, "*") ^^ {
-      case x :: Nil => x
-      case list     => list.reduceRight(TypePair(_, _))
-    })
+   BaseType ~ opt(("*" | "+") ~ SimpleType) ^^ {
+     case first ~ Some("*" ~ second) => TypePair(first, second)
+     case left ~ Some("+" ~ right) => TypeSum(left, right)
+     case tpe ~ None => tpe
+   }
+      )
 
   /**
    * BaseType ::= "Bool" | "Nat" | "(" Type ")"
@@ -140,8 +146,8 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case False()        => true
       case Abs(_, _, _)   => true
       case TermPair(a, b) => isValue(a) && isValue(b)
-      case Inl(v, t) if isValue(v) => true
-      case Inr(v, t) if isValue(v) => true
+      case Inl(v, _) => isValue(v)
+      case Inr(v, _) => isValue(v)
       case _              => isNumeric(t)
     })
 
@@ -175,11 +181,16 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case Second(Reducable(t2)) => Second(t2)
       case TermPair(Reducable(t1p), t2) => TermPair(t1p, t2)
       case TermPair(t1, Reducable(t2p)) => TermPair(t1, t2p)
-      case Case(t,x1,t1,x2, t2) => t match {
-        case Inl(v,_) if isValue(v) => subst(v, x1, t1)
-        case Inr(v,_) if isValue(v) => subst(v, x2, t2)
+      case Case(ty,x1,t1,x2, t2) => ty match {
+        case Inl(v,_) if isValue(v) => subst(t1, x1, v)
+        case Inr(v,_) if isValue(v) => subst(t2, x2, v)
+        case Reducable(t3) => Case(t3, x1, t1, x2, t2)
+        case _ => throw new NoRuleApplies(t) 
       } 
-      case Case(Reducable(t), x1, t1, x2, t2) => Case(t, x1, t1, x2, t2)
+      case Inl(Reducable(t1),tpe) => Inl(t1, tpe)
+      case Inr(Reducable(t1), tpe) => Inr(t1, tpe)  
+      case Fix(Abs(x, tp, t2)) => subst(t2, x, t)
+      case Fix(Reducable(t0)) => Fix(t0)
       
       case _ => throw new NoRuleApplies(t)
     }
@@ -209,6 +220,10 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case TermPair(t1, t2) => freeVariable(t1) ++ freeVariable(t2)
       case First(t1)        => freeVariable(t1)
       case Second(t1)       => freeVariable(t1)
+      case Case(t0, x1, t1, x2, t2) => freeVariable(t0)++freeVariable(t1)++freeVariable(t2)++Set(x1, x2)
+      case Inr(t1, _) => freeVariable(t1)
+      case Inl(t1, _) => freeVariable(t1)
+      case Fix(t1) => freeVariable(t1)
       case _                => Set.empty
     })
 
@@ -249,8 +264,7 @@ object SimplyTypedExtended extends StandardTokenParsers {
     // println("subst "+t.toString)
     t match {
       case Var(`x`) => s
-      case Abs(y, ty, t1) if (y != x && !(freeVariable(s)(y))) => Abs(y, ty, subst(t1, x, s))
-      case Abs(y, _, t1) if (y != x && (freeVariable(s)(y))) => subst(alpha(t), x, s)
+      case Abs(y, ty, t1) if (y != x ) => Abs(y, ty, subst(t1, x, s))
       case App(t1, t2) => App(subst(t1, x, s), subst(t2, x, s))
       case Pred(t1) => Pred(subst(t1, x, s))
       case Succ(t1) => Succ(subst(t1, x, s))
@@ -259,8 +273,15 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case TermPair(t1, t2) => TermPair(subst(t1, x, s), subst(t2, x, s))
       case First(t1) => First(subst(t1, x, s))
       case Second(t1) => Second(subst(t1, x, s))
+      case Case(t0, x1, t1, x2, t2) =>
+        val a1 = if(x==x1) t1 else subst(t1, x, s)
+        val a2 = if(x==x2) t2 else subst(t2, x, s)
+        Case(subst(t0, x, s), x1, a1, x2, a2)
+      case Inl(t1, ty) => Inl(subst(t1, x, s), ty)
+      case Inr(t1, ty) => Inr(subst(t1, x, s), ty)
       case _ => t
     }
+    
 
   }
   /**
@@ -278,34 +299,58 @@ object SimplyTypedExtended extends StandardTokenParsers {
       case Zero()  => TypeNat
       case Succ(t1) => typeof(ctx, t1) match {
         case TypeNat => TypeNat
-        case ty      => throw new TypeError(t, "parameter type mismatch: expected: Nat, found " + ty.toString)
+        case ty      => throw new TypeError(t, "parameter type mismatch: expected: Nat, found " + ty)
       }
       case Pred(t1) => typeof(ctx, t1) match {
         case TypeNat => TypeNat
-        case ty      => throw new TypeError(t, "parameter type mismatch: expected: Nat, found " + ty.toString)
+        case ty      => throw new TypeError(t, "parameter type mismatch: expected: Nat, found " + ty)
       }
       case IsZero(t1) => typeof(ctx, t1) match {
         case TypeNat => TypeBool
-        case ty      => throw new TypeError(t, "parameter type mismatch: expected: Bool, found " + ty.toString)
+        case ty      => throw new TypeError(t, "parameter type mismatch: expected: Bool, found " + ty)
       }
       case If(cond, t1, t2) => (typeof(ctx, cond), typeof(ctx, t1), typeof(ctx, t2)) match {
         case (TypeBool, tp1, tp2) if tp1 == tp2 => tp1
-        case (tp1, tp2, tp3)                    => throw new TypeError(t, "parameter type mismatch: expected: (Bool, t, t), found If " + tp1.toString + " then " + tp2.toString + " else " + tp3.toString())
+        case (tp1, tp2, tp3)                    => throw new TypeError(t, "parameter type mismatch: expected: (Bool, t, t), found If " + tp1 + " then " + tp2 + " else " + tp3)
       }
       case Var(x)         => ctx.find(_._1 == x).getOrElse(throw new TypeError(t, "variable " + x + " is undefined"))._2
       case Abs(x, ty, t2) => TypeFun(ty, typeof((x, ty) :: ctx, t2))
       case App(t1, t2) => (typeof(ctx, t1), typeof(ctx, t2)) match {
         case (TypeFun(tp1, tp2), tp3) if tp1 == tp3 => tp2
-        case (tp1, tp2)                             => throw new TypeError(t, "parameter type mismatch: expected: Fun, found: " + tp1.toString + ", " + tp2.toString)
+        case (tp1, tp2)                             => throw new TypeError(t, "parameter type mismatch: expected: Fun, found: " + tp1 + ", " + tp2)
       }
       case TermPair(t1, t2) => TypePair(typeof(ctx, t1), typeof(ctx, t2))
       case First(t1) => typeof(ctx, t1) match {
         case TypePair(t1p, t2p) => t1p
-        case ty                 => throw new TypeError(t, "parameter type mismatch: expected: Pair, found " + ty.toString)
+        case ty                 => throw new TypeError(t, "parameter type mismatch: expected: Pair, found " + ty)
       }
       case Second(t1) => typeof(ctx, t1) match {
         case TypePair(t1p, t2p) => t2p
-        case ty                 => throw new TypeError(t, "parameter type mismatch: expected: Pair, found " + ty.toString)
+        case ty                 => throw new TypeError(t, "parameter type mismatch: expected: Pair, found " + ty)
+      }
+      case Case(t0, x1, t1, x2, t2) => typeof(ctx, t0) match {
+        case TypeSum(a1, a2) => (typeof((x1, a1)::ctx, t1), typeof((x2, a2)::ctx, t2)) match {
+          case (tp1, tp2) if tp1 == tp2 => tp2
+          case ty => throw new TypeError(t, "Parametrer type mismatch: Expected Type sum, found: "+ty)
+        } 
+        case ty => throw new TypeError(t, "Parametrer type mismatch: Expected Type sum, found: "+ty)
+      }
+      
+      case Inl(t1, tpe) => 
+        val tp1 = typeof(ctx, t1)
+        tpe match {
+        case TypeSum(`tp1`, a2) => tpe
+        case ty => throw new TypeError(t, "Parametrer type mismatch: Expected Type sum, found: "+ty)
+      }
+      case Inr(t1, tpe) => 
+        val tp2 = typeof(ctx, t1)
+        tpe match {
+        case TypeSum(a1, `tp2`) => tpe
+        case ty => throw new TypeError(t, "Parametrer type mismatch: Expected Type sum, found: "+ty)
+      } 
+      case Fix(t1) => typeof(ctx, t1) match {
+        case TypeFun(tp1, tp2) if (tp1 == tp2) => tp1
+        case ty => throw new TypeError(t, "Parametrer type mismatch: Expected Type TypeFun, found: "+ty)
       }
     })
 
